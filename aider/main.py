@@ -408,6 +408,43 @@ def register_litellm_models(git_root, model_metadata_fname, io, verbose=False):
         io.tool_error(f"Error loading model metadata models: {e}")
         return 1
 
+# Cache for Venice model metadata (public endpoint, no API key needed)
+_venice_model_cache = None
+
+def load_venice_models() -> dict:
+    global _venice_model_cache
+    if _venice_model_cache is not None:
+        return _venice_model_cache
+    
+    _venice_model_cache = {}
+    try:
+        res = httpx.get(
+            "https://api.venice.ai/api/v1/models",
+            timeout=10.0
+        )
+        res.raise_for_status()
+        data = res.json()
+        
+        for model in data.get("models", []):
+            model_id = model.get("id")
+            if not model_id:
+                continue
+                
+            spec = model.get("model_spec", {})
+            capabilities = spec.get("capabilities", {})
+            pricing = spec.get("pricing", {})
+            
+            _venice_model_cache[model_id] = {
+                "context_window": spec.get("availableContextTokens", 128000),
+                "input_price_per_million": pricing.get("input", {}).get("usd", 0),
+                "output_price_per_million": pricing.get("output", {}).get("usd", 0),
+                "supports_vision": capabilities.get("supportsVision", False),
+                "display_name": model.get("name", model_id),
+            }
+    except (httpx.RequestError, httpx.HTTPStatusError) as e:
+        io.tool_warning(f"Could not fetch Venice.ai model list: {e}")
+    
+    return _venice_model_cache
 
 def sanity_check_repo(repo, io):
     if not repo:
